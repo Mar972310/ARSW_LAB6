@@ -1,58 +1,79 @@
-import { useEffect } from 'react';
-import PropTypes from 'prop-types';
+import { useEffect, useRef, useState } from "react";
+import SockJS from "sockjs-client";
+import { Client } from "@stomp/stompjs";
 
-function Canvas({ selectedBlueprint }) {
+const WS_URL = "http://localhost:8080/ws"; // Cambia esto según la configuración del backend
+
+export default function Canvas() {
+    const canvasRef = useRef(null);
+    const [points, setPoints] = useState([]);
+    const stompClient = useRef(null);
+
     useEffect(() => {
-        if (selectedBlueprint) {
-            const canvas = document.getElementById('blueprint-canvas');
-            const ctx = canvas.getContext('2d');
+        const socket = new SockJS(WS_URL);
+        const client = new Client({
+            webSocketFactory: () => socket,
+            onConnect: () => {
+                console.log("Connected to WebSocket");
+                client.subscribe("/topic/newpoint", (message) => {
+                    const point = JSON.parse(message.body);
+                    setPoints((prev) => [...prev, point]);
+                });
+            },
+            onStompError: (frame) => {
+                console.error("WebSocket error:", frame);
+            },
+        });
 
-            // Limpiar el Canvas antes de dibujar
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        client.activate();
+        stompClient.current = client;
 
-            // Obtener las coordenadas de los puntos
-            const points = selectedBlueprint.points;
+        return () => {
+            client.deactivate();
+        };
+    }, []);
 
-            // Si no hay puntos, no dibujar nada
-            if (points.length === 0) return;
+    useEffect(() => {
+        if (!canvasRef.current) return;
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext("2d");
 
-            // Dibujar los segmentos de recta
+        // Limpiar el canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Dibujar puntos y líneas
+        if (points.length > 0) {
             ctx.beginPath();
-            points.forEach((point, index) => {
+            points.forEach(({ x, y }, index) => {
                 if (index === 0) {
-                    ctx.moveTo(point.x, point.y); // Mover al primer punto
+                    ctx.moveTo(x, y);
                 } else {
-                    ctx.lineTo(point.x, point.y); // Dibujar línea al siguiente punto
+                    ctx.lineTo(x, y);
                 }
+                ctx.arc(x, y, 3, 0, 2 * Math.PI);
+                ctx.moveTo(x, y);
             });
-            ctx.stroke(); // Renderizar las líneas
+            ctx.stroke();
         }
-    }, [selectedBlueprint]);
+    }, [points]);
+
+    const handleClick = (e) => {
+        const rect = canvasRef.current.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const newPoint = { x, y };
+
+        // Enviar al WebSocket
+        stompClient.current.send("/topic/newpoint", {}, JSON.stringify(newPoint));
+
+        // También se puede actualizar localmente si se desea
+        setPoints((prev) => [...prev, newPoint]);
+    };
 
     return (
         <div>
-            <h3>
-                Current blueprint: <span id="current-blueprint">
-          {selectedBlueprint ? selectedBlueprint.name : '----'}
-        </span>
-            </h3>
-            <div className="blueprint-box">
-                <canvas id="blueprint-canvas" width="600" height="600"></canvas>
-            </div>
+            <h3>Click to add points</h3>
+            <canvas ref={canvasRef} width="600" height="600" onClick={handleClick} style={{ border: "1px solid black" }}></canvas>
         </div>
     );
 }
-
-Canvas.propTypes = {
-    selectedBlueprint: PropTypes.shape({
-        name: PropTypes.string.isRequired,
-        points: PropTypes.arrayOf(
-            PropTypes.shape({
-                x: PropTypes.number.isRequired,
-                y: PropTypes.number.isRequired,
-            })
-        ).isRequired,
-    }),
-};
-
-export default Canvas;
